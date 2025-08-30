@@ -7,7 +7,8 @@ process(name, *args, **kwargs), where *args and **kwargs are the arguments of th
 import abc
 import backoff
 import contextlib
-import openai
+# import openai
+from openai import OpenAI, RateLimitError
 import os
 import re
 import timeit
@@ -29,16 +30,18 @@ from typing import List, Union
 from configs import config
 from utils import HiddenPrints
 
-with open('api.key') as f:
-    openai.api_key = f.read().strip()
+# with open('api.key') as f:
+#     openai.api_key = f.read().strip()
 
 cache = Memory('cache/' if config.use_cache else None, verbose=0)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 console = Console(highlight=False)
-HiddenPrints = partial(HiddenPrints, console=console, use_newline=config.multiprocessing)
-
+HiddenPrints = partial(HiddenPrints,
+                       console=console,
+                       use_newline=config.multiprocessing)
 
 # --------------------------- Base abstract model --------------------------- #
+
 
 class BaseModel(abc.ABC):
     to_batch = False
@@ -89,7 +92,9 @@ class ObjectDetector(BaseModel):
         super().__init__(gpu_number)
 
         with HiddenPrints('ObjectDetector'):
-            detection_model = hub.load('facebookresearch/detr', 'detr_resnet50', pretrained=True).to(self.dev)
+            detection_model = hub.load('facebookresearch/detr',
+                                       'detr_resnet50',
+                                       pretrained=True).to(self.dev)
             detection_model.eval()
 
         self.detection_model = detection_model
@@ -97,10 +102,12 @@ class ObjectDetector(BaseModel):
     @torch.no_grad()
     def forward(self, image: torch.Tensor):
         """get_object_detection_bboxes"""
-        input_batch = image.to(self.dev).unsqueeze(0)  # create a mini-batch as expected by the model
+        input_batch = image.to(self.dev).unsqueeze(
+            0)  # create a mini-batch as expected by the model
         detections = self.detection_model(input_batch)
         p = detections['pred_boxes']
-        p = torch.stack([p[..., 0], 1 - p[..., 3], p[..., 2], 1 - p[..., 1]], -1)  # [left, lower, right, upper]
+        p = torch.stack([p[..., 0], 1 - p[..., 3], p[..., 2], 1 - p[..., 1]],
+                        -1)  # [left, lower, right, upper]
         detections['pred_boxes'] = p
         return detections
 
@@ -113,7 +120,9 @@ class DepthEstimationModel(BaseModel):
         with HiddenPrints('DepthEstimation'):
             warnings.simplefilter("ignore")
             # Model options: MiDaS_small, DPT_Hybrid, DPT_Large
-            depth_estimation_model = hub.load('intel-isl/MiDaS', model_type, pretrained=True).to(self.dev)
+            depth_estimation_model = hub.load('intel-isl/MiDaS',
+                                              model_type,
+                                              pretrained=True).to(self.dev)
             depth_estimation_model.eval()
 
             midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
@@ -159,7 +168,8 @@ class CLIPModel(BaseModel):
             model.requires_grad_ = False
         self.model = model
         self.negative_text_features = None
-        self.transform = self.get_clip_transforms_from_tensor(336 if "336" in version else 224)
+        self.transform = self.get_clip_transforms_from_tensor(336 if "336" in
+                                                              version else 224)
 
     # @staticmethod
     def _convert_image_to_rgb(self, image):
@@ -169,18 +179,25 @@ class CLIPModel(BaseModel):
     def get_clip_transforms_from_tensor(self, n_px=336):
         return transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize(n_px, interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.Resize(
+                n_px, interpolation=transforms.InterpolationMode.BICUBIC),
             transforms.CenterCrop(n_px),
             self._convert_image_to_rgb,
             transforms.ToTensor(),
-            transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
+            transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+                                 (0.26862954, 0.26130258, 0.27577711)),
         ])
 
     @torch.no_grad()
-    def binary_score(self, image: torch.Tensor, prompt, negative_categories=None):
+    def binary_score(self,
+                     image: torch.Tensor,
+                     prompt,
+                     negative_categories=None):
         is_video = isinstance(image, torch.Tensor) and image.ndim == 4
         if is_video:  # video
-            image = torch.stack([self.transform(image[i]) for i in range(image.shape[0])], dim=0)
+            image = torch.stack(
+                [self.transform(image[i]) for i in range(image.shape[0])],
+                dim=0)
         else:
             image = self.transform(image).unsqueeze(0).to(self.dev)
 
@@ -189,10 +206,12 @@ class CLIPModel(BaseModel):
 
         if negative_categories is None:
             if self.negative_text_features is None:
-                self.negative_text_features = self.clip_negatives(prompt_prefix)
+                self.negative_text_features = self.clip_negatives(
+                    prompt_prefix)
             negative_text_features = self.negative_text_features
         else:
-            negative_text_features = self.clip_negatives(prompt_prefix, negative_categories)
+            negative_text_features = self.clip_negatives(
+                prompt_prefix, negative_categories)
 
         text = self.clip.tokenize([prompt]).to(self.dev)
 
@@ -202,18 +221,24 @@ class CLIPModel(BaseModel):
         pos_text_features = self.model.encode_text(text)
         pos_text_features = F.normalize(pos_text_features, dim=-1)
 
-        text_features = torch.concat([pos_text_features, negative_text_features], axis=0)
+        text_features = torch.concat(
+            [pos_text_features, negative_text_features], axis=0)
 
         # run competition where we do a binary classification
         # between the positive and all the negatives, then take the mean
         sim = (100.0 * image_features @ text_features.T).squeeze(dim=0)
         if is_video:
-            query = sim[..., 0].unsqueeze(-1).broadcast_to(sim.shape[0], sim.shape[-1] - 1)
+            query = sim[...,
+                        0].unsqueeze(-1).broadcast_to(sim.shape[0],
+                                                      sim.shape[-1] - 1)
             others = sim[..., 1:]
-            res = F.softmax(torch.stack([query, others], dim=-1), dim=-1)[..., 0].mean(-1)
+            res = F.softmax(torch.stack([query, others], dim=-1),
+                            dim=-1)[..., 0].mean(-1)
         else:
-            res = F.softmax(torch.cat((sim[0].broadcast_to(1, sim.shape[0] - 1),
-                                       sim[1:].unsqueeze(0)), dim=0), dim=0)[0].mean()
+            res = F.softmax(torch.cat((sim[0].broadcast_to(
+                1, sim.shape[0] - 1), sim[1:].unsqueeze(0)),
+                                      dim=0),
+                            dim=0)[0].mean()
         return res
 
     @torch.no_grad()
@@ -232,7 +257,10 @@ class CLIPModel(BaseModel):
         return negative_text_features
 
     @torch.no_grad()
-    def classify(self, image: Union[torch.Tensor, list], categories: list[str], return_index=True):
+    def classify(self,
+                 image: Union[torch.Tensor, list],
+                 categories: list[str],
+                 return_index=True):
         is_list = isinstance(image, list)
         if is_list:
             assert len(image) == len(categories)
@@ -241,7 +269,8 @@ class CLIPModel(BaseModel):
         elif len(image.shape) == 3:
             image_clip = self.transform(image).to(self.dev).unsqueeze(0)
         else:  # Video (process images separately)
-            image_clip = torch.stack([self.transform(x) for x in image], dim=0).to(self.dev)
+            image_clip = torch.stack([self.transform(x) for x in image],
+                                     dim=0).to(self.dev)
 
         # if len(image_clip.shape) == 3:
         #     image_clip = image_clip.unsqueeze(0)
@@ -262,7 +291,9 @@ class CLIPModel(BaseModel):
         else:
             if is_list:
                 # get highest category-image match with n images and n corresponding categories
-                softmax_arg = (image_features @ text_features.T).diag().unsqueeze(0)  # n x n -> 1 x n
+                softmax_arg = (
+                    image_features @ text_features.T).diag().unsqueeze(
+                        0)  # n x n -> 1 x n
             else:
                 softmax_arg = (image_features @ text_features.T)
 
@@ -277,7 +308,9 @@ class CLIPModel(BaseModel):
 
     @torch.no_grad()
     def compare(self, images: list[torch.Tensor], prompt, return_scores=False):
-        images = [self.transform(im).unsqueeze(0).to(self.dev) for im in images]
+        images = [
+            self.transform(im).unsqueeze(0).to(self.dev) for im in images
+        ]
         images = torch.cat(images, dim=0)
 
         prompt_prefix = "photo of "
@@ -291,20 +324,30 @@ class CLIPModel(BaseModel):
         text_features = self.model.encode_text(text)
         text_features = F.normalize(text_features, dim=-1)
 
-        sim = (image_features @ text_features.T).squeeze(dim=-1)  # Only one text, so squeeze
+        sim = (image_features @ text_features.T).squeeze(
+            dim=-1)  # Only one text, so squeeze
 
         if return_scores:
             return sim
         res = sim.argmax()
         return res
 
-    def forward(self, image, prompt, task='score', return_index=True, negative_categories=None, return_scores=False):
+    def forward(self,
+                image,
+                prompt,
+                task='score',
+                return_index=True,
+                negative_categories=None,
+                return_scores=False):
         if task == 'classify':
             categories = prompt
-            clip_sim = self.classify(image, categories, return_index=return_index)
+            clip_sim = self.classify(image,
+                                     categories,
+                                     return_index=return_index)
             out = clip_sim
         elif task == 'score':
-            clip_score = self.binary_score(image, prompt, negative_categories=negative_categories)
+            clip_score = self.binary_score(
+                image, prompt, negative_categories=negative_categories)
             out = clip_score
         else:  # task == 'compare'
             idx = self.compare(image, prompt, return_scores)
@@ -317,13 +360,17 @@ class CLIPModel(BaseModel):
 class MaskRCNNModel(BaseModel):
     name = 'maskrcnn'
 
-    def __init__(self, gpu_number=0, threshold=config.detect_thresholds.maskrcnn):
+    def __init__(self,
+                 gpu_number=0,
+                 threshold=config.detect_thresholds.maskrcnn):
         super().__init__(gpu_number)
         with HiddenPrints('MaskRCNN'):
-            obj_detect = torchvision.models.detection.maskrcnn_resnet50_fpn_v2(weights='COCO_V1').to(self.dev)
+            obj_detect = torchvision.models.detection.maskrcnn_resnet50_fpn_v2(
+                weights='COCO_V1').to(self.dev)
             obj_detect.eval()
             obj_detect.requires_grad_(False)
-        self.categories = torchvision.models.detection.MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1.meta['categories']
+        self.categories = torchvision.models.detection.MaskRCNN_ResNet50_FPN_V2_Weights.COCO_V1.meta[
+            'categories']
         self.obj_detect = obj_detect
         self.threshold = threshold
 
@@ -341,33 +388,46 @@ class MaskRCNNModel(BaseModel):
             height = detections[i]['masks'].shape[-2]
             # Just return boxes (no labels no masks, no scores) with scores > threshold
             if return_labels:  # In the current implementation, we only return labels
-                d_i = detections[i]['labels'][detections[i]['scores'] > self.threshold]
+                d_i = detections[i]['labels'][detections[i]['scores'] >
+                                              self.threshold]
                 detections[i] = set([self.categories[d] for d in d_i])
             else:
-                d_i = detections[i]['boxes'][detections[i]['scores'] > self.threshold]
+                d_i = detections[i]['boxes'][detections[i]['scores'] >
+                                             self.threshold]
                 # Return [left, lower, right, upper] instead of [left, upper, right, lower]
-                detections[i] = torch.stack([d_i[:, 0], height - d_i[:, 3], d_i[:, 2], height - d_i[:, 1]], dim=1)
+                detections[i] = torch.stack([
+                    d_i[:, 0], height - d_i[:, 3], d_i[:, 2],
+                    height - d_i[:, 1]
+                ],
+                                            dim=1)
 
         return detections
 
     def forward(self, image, return_labels=False):
         obj_detections = self.detect(image, return_labels)
         # Move to CPU before sharing. Alternatively we can try cloning tensors in CUDA, but may not work
-        obj_detections = [(v.to('cpu') if isinstance(v, torch.Tensor) else list(v)) for v in obj_detections]
+        obj_detections = [
+            (v.to('cpu') if isinstance(v, torch.Tensor) else list(v))
+            for v in obj_detections
+        ]
         return obj_detections
 
 
 class OwlViTModel(BaseModel):
     name = 'owlvit'
 
-    def __init__(self, gpu_number=0, threshold=config.detect_thresholds.owlvit):
+    def __init__(self,
+                 gpu_number=0,
+                 threshold=config.detect_thresholds.owlvit):
         super().__init__(gpu_number)
 
         from transformers import OwlViTProcessor, OwlViTForObjectDetection
 
         with HiddenPrints("OwlViT"):
-            processor = OwlViTProcessor.from_pretrained("google/owlvit-base-patch32")
-            model = OwlViTForObjectDetection.from_pretrained("google/owlvit-base-patch32")
+            processor = OwlViTProcessor.from_pretrained(
+                "google/owlvit-base-patch32")
+            model = OwlViTForObjectDetection.from_pretrained(
+                "google/owlvit-base-patch32")
             model.eval()
             model.requires_grad_(False)
         self.model = model.to(self.dev)
@@ -375,29 +435,38 @@ class OwlViTModel(BaseModel):
         self.threshold = threshold
 
     @torch.no_grad()
-    def forward(self, image: torch.Tensor, text: List[str], return_labels: bool = False):
+    def forward(self,
+                image: torch.Tensor,
+                text: List[str],
+                return_labels: bool = False):
         if isinstance(image, list):
             raise TypeError("image has to be a torch tensor, not a list")
         if isinstance(text, str):
             text = [text]
         text_original = text
         text = ['a photo of a ' + t for t in text]
-        inputs = self.processor(text=text, images=image, return_tensors="pt")  # padding="longest",
+        inputs = self.processor(text=text, images=image,
+                                return_tensors="pt")  # padding="longest",
         inputs = {k: v.to(self.dev) for k, v in inputs.items()}
         outputs = self.model(**inputs)
 
         # Target image sizes (height, width) to rescale box predictions [batch_size, 2]
         target_sizes = torch.tensor([image.shape[1:]]).to(self.dev)
         # Convert outputs (bounding boxes and class logits) to COCO API
-        results = self.processor.post_process(outputs=outputs, target_sizes=target_sizes)
+        results = self.processor.post_process(outputs=outputs,
+                                              target_sizes=target_sizes)
 
-        boxes, scores, labels = results[0]["boxes"], results[0]["scores"], results[0]["labels"]
+        boxes, scores, labels = results[0]["boxes"], results[0][
+            "scores"], results[0]["labels"]
 
         indices_good = scores > self.threshold
         boxes = boxes[indices_good]
 
         # Change to format where large "upper"/"lower" means more up
-        left, upper, right, lower = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
+        left, upper, right, lower = boxes[:, 0], boxes[:,
+                                                       1], boxes[:,
+                                                                 2], boxes[:,
+                                                                           3]
         height = image.shape[-2]
         boxes = torch.stack([left, height - lower, right, height - upper], -1)
 
@@ -415,7 +484,9 @@ class GLIPModel(BaseModel):
     def __init__(self, model_size='large', gpu_number=0, *args):
         BaseModel.__init__(self, gpu_number)
 
-        with contextlib.redirect_stderr(open(os.devnull, "w")):  # Do not print nltk_data messages when importing
+        with contextlib.redirect_stderr(
+                open(os.devnull,
+                     "w")):  # Do not print nltk_data messages when importing
             from maskrcnn_benchmark.engine.predictor_glip import GLIPDemo, to_image_list, create_positive_map, \
                 create_positive_map_label_to_token_from_positive_map
 
@@ -460,24 +531,33 @@ class GLIPModel(BaseModel):
                 self.color = 255
 
             @torch.no_grad()
-            def compute_prediction(self, original_image, original_caption, custom_entity=None):
+            def compute_prediction(self,
+                                   original_image,
+                                   original_caption,
+                                   custom_entity=None):
                 image = self.transforms(original_image)
                 # image = [image, image.permute(0, 2, 1)]
-                image_list = to_image_list(image, self.cfg.DATALOADER.SIZE_DIVISIBILITY)
+                image_list = to_image_list(
+                    image, self.cfg.DATALOADER.SIZE_DIVISIBILITY)
                 image_list = image_list.to(self.dev)
                 # caption
                 if isinstance(original_caption, list):
 
                     if len(original_caption) > 40:
                         all_predictions = None
-                        for loop_num, i in enumerate(range(0, len(original_caption), 40)):
+                        for loop_num, i in enumerate(
+                                range(0, len(original_caption), 40)):
                             list_step = original_caption[i:i + 40]
-                            prediction_step = self.compute_prediction(original_image, list_step, custom_entity=None)
+                            prediction_step = self.compute_prediction(
+                                original_image, list_step, custom_entity=None)
                             if all_predictions is None:
                                 all_predictions = prediction_step
                             else:
                                 # Aggregate predictions
-                                all_predictions.bbox = torch.cat((all_predictions.bbox, prediction_step.bbox), dim=0)
+                                all_predictions.bbox = torch.cat(
+                                    (all_predictions.bbox,
+                                     prediction_step.bbox),
+                                    dim=0)
                                 for k in all_predictions.extra_fields:
                                     all_predictions.extra_fields[k] = \
                                         torch.cat((all_predictions.extra_fields[k],
@@ -489,33 +569,40 @@ class GLIPModel(BaseModel):
                     tokens_positive = []
                     seperation_tokens = " . "
                     for word in original_caption:
-                        tokens_positive.append([len(caption_string), len(caption_string) + len(word)])
+                        tokens_positive.append([
+                            len(caption_string),
+                            len(caption_string) + len(word)
+                        ])
                         caption_string += word
                         caption_string += seperation_tokens
 
-                    tokenized = self.tokenizer([caption_string], return_tensors="pt")
+                    tokenized = self.tokenizer([caption_string],
+                                               return_tensors="pt")
                     # tokens_positive = [tokens_positive]  # This was wrong
                     tokens_positive = [[v] for v in tokens_positive]
 
                     original_caption = caption_string
                     # print(tokens_positive)
                 else:
-                    tokenized = self.tokenizer([original_caption], return_tensors="pt")
+                    tokenized = self.tokenizer([original_caption],
+                                               return_tensors="pt")
                     if custom_entity is None:
                         tokens_positive = self.run_ner(original_caption)
                     # print(tokens_positive)
                 # process positive map
                 positive_map = create_positive_map(tokenized, tokens_positive)
 
-                positive_map_label_to_token = create_positive_map_label_to_token_from_positive_map(positive_map,
-                                                                                                   plus=self.plus)
+                positive_map_label_to_token = create_positive_map_label_to_token_from_positive_map(
+                    positive_map, plus=self.plus)
                 self.positive_map_label_to_token = positive_map_label_to_token
                 tic = timeit.time.perf_counter()
 
                 # compute predictions
                 with HiddenPrints():  # Hide some deprecated notices
-                    predictions = self.model(image_list, captions=[original_caption],
-                                             positive_map=positive_map_label_to_token)
+                    predictions = self.model(
+                        image_list,
+                        captions=[original_caption],
+                        positive_map=positive_map_label_to_token)
                 predictions = [o.to(self.cpu_device) for o in predictions]
                 # print("inference time per image: {}".format(timeit.time.perf_counter() - tic))
 
@@ -541,20 +628,26 @@ class GLIPModel(BaseModel):
 
             @staticmethod
             def to_left_right_upper_lower(bboxes):
-                return [(bbox[1], bbox[3], bbox[0], bbox[2]) for bbox in bboxes]
+                return [(bbox[1], bbox[3], bbox[0], bbox[2])
+                        for bbox in bboxes]
 
             @staticmethod
             def to_xmin_ymin_xmax_ymax(bboxes):
                 # invert the previous method
-                return [(bbox[2], bbox[0], bbox[3], bbox[1]) for bbox in bboxes]
+                return [(bbox[2], bbox[0], bbox[3], bbox[1])
+                        for bbox in bboxes]
 
             @staticmethod
             def prepare_image(image):
-                image = image[[2, 1, 0]]  # convert to bgr for opencv-format for glip
+                image = image[[2, 1,
+                               0]]  # convert to bgr for opencv-format for glip
                 return image
 
             @torch.no_grad()
-            def forward(self, image: torch.Tensor, obj: Union[str, list], return_labels: bool = False,
+            def forward(self,
+                        image: torch.Tensor,
+                        obj: Union[str, list],
+                        return_labels: bool = False,
                         confidence_threshold=None):
 
                 if confidence_threshold is not None:
@@ -570,7 +663,8 @@ class GLIPModel(BaseModel):
                 ratio = max(ratio, 1 / ratio)
                 original_min_image_size = self.min_image_size
                 if ratio > 10:
-                    self.min_image_size = int(original_min_image_size * 10 / ratio)
+                    self.min_image_size = int(original_min_image_size * 10 /
+                                              ratio)
                     self.transforms = self.build_transform()
 
                 with torch.cuda.device(self.dev):
@@ -587,13 +681,18 @@ class GLIPModel(BaseModel):
 
                 # Convert to [left, lower, right, upper] instead of [left, upper, right, lower]
                 height = image.shape[-2]
-                bboxes = torch.stack([bboxes[:, 0], height - bboxes[:, 3], bboxes[:, 2], height - bboxes[:, 1]], dim=1)
+                bboxes = torch.stack([
+                    bboxes[:, 0], height - bboxes[:, 3], bboxes[:, 2],
+                    height - bboxes[:, 1]
+                ],
+                                     dim=1)
 
                 if confidence_threshold is not None:
                     self.confidence_threshold = original_confidence_threshold
                 if return_labels:
                     # subtract 1 because it's 1-indexed for some reason
-                    return bboxes, inference_output.get_field("labels").cpu().numpy() - 1
+                    return bboxes, inference_output.get_field(
+                        "labels").cpu().numpy() - 1
                 return bboxes
 
         self.glip_demo = OurGLIPDemo(*args, dev=self.dev)
@@ -629,25 +728,31 @@ class TCLModel(BaseModel):
         self.tokenizer = BertTokenizer.from_pretrained(text_encoder)
 
         with warnings.catch_warnings(), HiddenPrints("TCL"):
-            model = ALBEF(config=config, text_encoder=text_encoder, tokenizer=self.tokenizer)
+            model = ALBEF(config=config,
+                          text_encoder=text_encoder,
+                          tokenizer=self.tokenizer)
 
             checkpoint = torch.load(checkpoint_path, map_location='cpu')
             state_dict = checkpoint['model']
 
             # reshape positional embedding to accomodate for image resolution change
-            pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder.pos_embed'], model.visual_encoder)
+            pos_embed_reshaped = interpolate_pos_embed(
+                state_dict['visual_encoder.pos_embed'], model.visual_encoder)
             state_dict['visual_encoder.pos_embed'] = pos_embed_reshaped
-            m_pos_embed_reshaped = interpolate_pos_embed(state_dict['visual_encoder_m.pos_embed'],
-                                                         model.visual_encoder_m)
+            m_pos_embed_reshaped = interpolate_pos_embed(
+                state_dict['visual_encoder_m.pos_embed'],
+                model.visual_encoder_m)
             state_dict['visual_encoder_m.pos_embed'] = m_pos_embed_reshaped
             model.load_state_dict(state_dict, strict=False)
 
         self.model = model.to(self.dev)
         self.model.eval()
 
-        normalize = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
+        normalize = transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+                                         (0.26862954, 0.26130258, 0.27577711))
         self.test_transform = transforms.Compose([
-            transforms.Resize((config['image_res'], config['image_res']), interpolation=Image.BICUBIC),
+            transforms.Resize((config['image_res'], config['image_res']),
+                              interpolation=Image.BICUBIC),
             transforms.ToTensor(),
             normalize,
         ])
@@ -666,7 +771,8 @@ class TCLModel(BaseModel):
         return image
 
     @torch.no_grad()
-    def binary_score(self, images: Union[list[torch.Tensor], torch.Tensor], prompt):
+    def binary_score(self, images: Union[list[torch.Tensor], torch.Tensor],
+                     prompt):
         single_image = False
         if isinstance(images, torch.Tensor):
             single_image = True
@@ -676,14 +782,18 @@ class TCLModel(BaseModel):
 
         first_words = ['description', 'caption', 'alt text']
         second_words = ['photo', 'image', 'picture']
-        options = [f'{fw}: {sw} of a' for fw in first_words for sw in second_words]
+        options = [
+            f'{fw}: {sw} of a' for fw in first_words for sw in second_words
+        ]
 
         prompts = [f'{option} {prompt}' for option in options]
 
         text_input = self.tokenizer(prompts, padding='max_length', truncation=True, max_length=30, return_tensors="pt") \
             .to(self.dev)
-        text_output = self.model.text_encoder(text_input.input_ids, attention_mask=text_input.attention_mask,
-                                              mode='text')
+        text_output = self.model.text_encoder(
+            text_input.input_ids,
+            attention_mask=text_input.attention_mask,
+            mode='text')
         text_feats = text_output  # .last_hidden_state
         text_atts = text_input.attention_mask
 
@@ -691,14 +801,22 @@ class TCLModel(BaseModel):
 
         img_len = image_feats.shape[0]
         text_len = text_feats.shape[0]
-        image_feats = image_feats.unsqueeze(1).repeat(1, text_len, 1, 1).view(-1, *image_feats.shape[-2:])
-        text_feats = text_feats.unsqueeze(0).repeat(img_len, 1, 1, 1).view(-1, *text_feats.shape[-2:])
-        text_atts = text_atts.unsqueeze(0).repeat(img_len, 1, 1).view(-1, *text_atts.shape[-1:])
+        image_feats = image_feats.unsqueeze(1).repeat(1, text_len, 1, 1).view(
+            -1, *image_feats.shape[-2:])
+        text_feats = text_feats.unsqueeze(0).repeat(img_len, 1, 1, 1).view(
+            -1, *text_feats.shape[-2:])
+        text_atts = text_atts.unsqueeze(0).repeat(img_len, 1, 1).view(
+            -1, *text_atts.shape[-1:])
 
-        image_feats_att = torch.ones(image_feats.size()[:-1], dtype=torch.long).to(self.dev)
-        output = self.model.text_encoder(encoder_embeds=text_feats, attention_mask=text_atts,
-                                         encoder_hidden_states=image_feats, encoder_attention_mask=image_feats_att,
-                                         return_dict=True, mode='fusion')
+        image_feats_att = torch.ones(image_feats.size()[:-1],
+                                     dtype=torch.long).to(self.dev)
+        output = self.model.text_encoder(
+            encoder_embeds=text_feats,
+            attention_mask=text_atts,
+            encoder_hidden_states=image_feats,
+            encoder_attention_mask=image_feats_att,
+            return_dict=True,
+            mode='fusion')
 
         scores = self.model.itm_head(output[:, 0, :])[:, 1]
         scores = scores.view(img_len, text_len)
@@ -720,8 +838,10 @@ class TCLModel(BaseModel):
 
         text_input = self.tokenizer(texts, padding='max_length', truncation=True, max_length=30, return_tensors="pt") \
             .to(self.dev)
-        text_output = self.model.text_encoder(text_input.input_ids, attention_mask=text_input.attention_mask,
-                                              mode='text')
+        text_output = self.model.text_encoder(
+            text_input.input_ids,
+            attention_mask=text_input.attention_mask,
+            mode='text')
         text_feats = text_output  # .last_hidden_state
         text_embeds = F.normalize(self.model.text_proj(text_feats[:, 0, :]))
         text_atts = text_input.attention_mask
@@ -738,10 +858,15 @@ class TCLModel(BaseModel):
         # Image-Text Matching (ITM): Binary classifier for every image-text pair
         # Only one direction, because we do not filter bet t2i, i2t, and do all pairs
 
-        image_feats_att = torch.ones(image_feats.size()[:-1], dtype=torch.long).to(self.dev)
-        output = self.model.text_encoder(encoder_embeds=text_feats, attention_mask=text_atts,
-                                         encoder_hidden_states=image_feats, encoder_attention_mask=image_feats_att,
-                                         return_dict=True, mode='fusion')
+        image_feats_att = torch.ones(image_feats.size()[:-1],
+                                     dtype=torch.long).to(self.dev)
+        output = self.model.text_encoder(
+            encoder_embeds=text_feats,
+            attention_mask=text_atts,
+            encoder_hidden_states=image_feats,
+            encoder_attention_mask=image_feats_att,
+            return_dict=True,
+            mode='fusion')
 
         score_matrix = self.model.itm_head(output[:, 0, :])[:, 1]
 
@@ -793,7 +918,9 @@ class GPT3Model(BaseModel):
         answer = answer.replace('.', '').replace(',', '').lower()
         to_be_removed = {'a', 'an', 'the', 'to', ''}
         answer_list = answer.split(' ')
-        answer_list = [item for item in answer_list if item not in to_be_removed]
+        answer_list = [
+            item for item in answer_list if item not in to_be_removed
+        ]
         return ' '.join(answer_list)
 
     @staticmethod
@@ -813,28 +940,43 @@ class GPT3Model(BaseModel):
             if len(guess1) == 1:
                 # In case only one option is given as a guess
                 guess1 = [guess1[0], guess1[0]]
-            prompts_total.append(prompt_base.format(question, guess1[0], guess1[1]))
+            prompts_total.append(
+                prompt_base.format(question, guess1[0], guess1[1]))
         response = self.process_guesses_fn(prompts_total)
         if self.n_votes > 1:
             response_ = []
             for i in range(len(prompts)):
                 if self.model == 'chatgpt':
-                    resp_i = [r['message']['content'] for r in
-                              response['choices'][i * self.n_votes:(i + 1) * self.n_votes]]
+                    resp_i = [
+                        r['message']['content']
+                        for r in response['choices'][i * self.n_votes:(i + 1) *
+                                                     self.n_votes]
+                    ]
                 else:
-                    resp_i = [r['text'] for r in response['choices'][i * self.n_votes:(i + 1) * self.n_votes]]
+                    resp_i = [
+                        r['text']
+                        for r in response['choices'][i * self.n_votes:(i + 1) *
+                                                     self.n_votes]
+                    ]
                 response_.append(self.most_frequent(resp_i).lstrip())
             response = response_
         else:
             if self.model == 'chatgpt':
-                response = [r['message']['content'].lstrip() for r in response['choices']]
+                response = [
+                    r['message']['content'].lstrip()
+                    for r in response['choices']
+                ]
             else:
                 response = [r['text'].lstrip() for r in response['choices']]
         return response
 
     def process_guesses_fn(self, prompt):
         # The code is the same as get_qa_fn, but we separate in case we want to modify it later
-        response = self.query_gpt3(prompt, model=self.model, max_tokens=5, logprobs=1, stream=False,
+        response = self.query_gpt3(prompt,
+                                   model=self.model,
+                                   max_tokens=5,
+                                   logprobs=1,
+                                   stream=False,
                                    stop=["\n", "<|endoftext|>"])
         return response
 
@@ -850,26 +992,45 @@ class GPT3Model(BaseModel):
             response_ = []
             for i in range(len(prompts)):
                 if self.model == 'chatgpt':
-                    resp_i = [r['message']['content'] for r in
-                              response['choices'][i * self.n_votes:(i + 1) * self.n_votes]]
+                    resp_i = [
+                        r['message']['content']
+                        for r in response['choices'][i * self.n_votes:(i + 1) *
+                                                     self.n_votes]
+                    ]
                 else:
-                    resp_i = [r['text'] for r in response['choices'][i * self.n_votes:(i + 1) * self.n_votes]]
+                    resp_i = [
+                        r['text']
+                        for r in response['choices'][i * self.n_votes:(i + 1) *
+                                                     self.n_votes]
+                    ]
                 response_.append(self.most_frequent(resp_i))
             response = response_
         else:
             if self.model == 'chatgpt':
-                response = [r['message']['content'] for r in response['choices']]
+                response = [
+                    r['message']['content'] for r in response['choices']
+                ]
             else:
-                response = [self.process_answer(r["text"]) for r in response['choices']]
+                response = [
+                    self.process_answer(r["text"]) for r in response['choices']
+                ]
         return response
 
     def get_qa_fn(self, prompt):
-        response = self.query_gpt3(prompt, model=self.model, max_tokens=5, logprobs=1, stream=False,
+        response = self.query_gpt3(prompt,
+                                   model=self.model,
+                                   max_tokens=5,
+                                   logprobs=1,
+                                   stream=False,
                                    stop=["\n", "<|endoftext|>"])
         return response
 
     def get_general(self, prompts) -> list[str]:
-        response = self.query_gpt3(prompts, model=self.model, max_tokens=256, top_p=1, frequency_penalty=0,
+        response = self.query_gpt3(prompts,
+                                   model=self.model,
+                                   max_tokens=256,
+                                   top_p=1,
+                                   frequency_penalty=0,
                                    presence_penalty=0)
         if self.model == 'chatgpt':
             response = [r['message']['content'] for r in response['choices']]
@@ -877,8 +1038,16 @@ class GPT3Model(BaseModel):
             response = [r["text"] for r in response['choices']]
         return response
 
-    def query_gpt3(self, prompt, model="text-davinci-003", max_tokens=16, logprobs=None, stream=False,
-                   stop=None, top_p=1, frequency_penalty=0, presence_penalty=0):
+    def query_gpt3(self,
+                   prompt,
+                   model="text-davinci-003",
+                   max_tokens=16,
+                   logprobs=None,
+                   stream=False,
+                   stop=None,
+                   top_p=1,
+                   frequency_penalty=0,
+                   presence_penalty=0):
         if model == "chatgpt":
             messages = [{"role": "user", "content": p} for p in prompt]
             response = openai.ChatCompletion.create(
@@ -910,7 +1079,9 @@ class GPT3Model(BaseModel):
         if process_name == 'gpt3_qa':
             # if items in prompt are tuples, then we assume it is a question and context
             if isinstance(prompt[0], tuple) or isinstance(prompt[0], list):
-                prompt = [question.format(context) for question, context in prompt]
+                prompt = [
+                    question.format(context) for question, context in prompt
+                ]
 
         to_compute = None
         results = []
@@ -919,8 +1090,11 @@ class GPT3Model(BaseModel):
             for p in prompt:
                 # This is not ideal, because if not found, later it will have to re-hash the arguments.
                 # But I could not find a better way to do it.
-                result = gpt3_cache_aux(process_name, p, self.temperature, self.n_votes, None)
-                results.append(result)  # If in cache, will be actual result, otherwise None
+                result = gpt3_cache_aux(process_name, p, self.temperature,
+                                        self.n_votes, None)
+                results.append(
+                    result
+                )  # If in cache, will be actual result, otherwise None
             to_compute = [i for i, r in enumerate(results) if r is None]
             prompt = [prompt[i] for i in to_compute]
 
@@ -937,7 +1111,8 @@ class GPT3Model(BaseModel):
         if config.use_cache:
             for p, r in zip(prompt, response):
                 # "call" forces the overwrite of the cache
-                gpt3_cache_aux.call(process_name, p, self.temperature, self.n_votes, r)
+                gpt3_cache_aux.call(process_name, p, self.temperature,
+                                    self.n_votes, r)
             for i, idx in enumerate(to_compute):
                 results[idx] = response[i]
         else:
@@ -952,56 +1127,102 @@ class GPT3Model(BaseModel):
         return ['gpt3_' + n for n in ['qa', 'guess', 'general']]
 
 
-# @cache.cache
+# # @cache.cache
+# @backoff.on_exception(backoff.expo, Exception, max_tries=10)
+# def codex_helper(extended_prompt):
+#     assert 0 <= config.codex.temperature <= 1
+#     assert 1 <= config.codex.best_of <= 20
+
+#     if config.codex.model in ("gpt-4", "gpt-3.5-turbo"):
+#         if not isinstance(extended_prompt, list):
+#             extended_prompt = [extended_prompt]
+#         responses = [openai.ChatCompletion.create(
+#             model=config.codex.model,
+#             messages=[
+#                 # {"role": "system", "content": "You are a helpful assistant."},
+#                 {"role": "system", "content": "Only answer with a function starting def execute_command."},
+#                 {"role": "user", "content": prompt}
+#             ],
+#             temperature=config.codex.temperature,
+#             max_tokens=config.codex.max_tokens,
+#             top_p=1.,
+#             frequency_penalty=0,
+#             presence_penalty=0,
+#             #                 best_of=config.codex.best_of,
+#             stop=["\n\n"],
+#         )
+#             for prompt in extended_prompt]
+#         resp = [r['choices'][0]['message']['content'].replace("execute_command(image)",
+#                                                               "execute_command(image, my_fig, time_wait_between_lines, syntax)")
+#                 for r in responses]
+#     #         if len(resp) == 1:
+#     #             resp = resp[0]
+#     else:
+#         warnings.warn('OpenAI Codex is deprecated. Please use GPT-4 or GPT-3.5-turbo.')
+#         response = openai.Completion.create(
+#             model="code-davinci-002",
+#             temperature=config.codex.temperature,
+#             prompt=extended_prompt,
+#             max_tokens=config.codex.max_tokens,
+#             top_p=1,
+#             frequency_penalty=0,
+#             presence_penalty=0,
+#             best_of=config.codex.best_of,
+#             stop=["\n\n"],
+#         )
+
+#         if isinstance(extended_prompt, list):
+#             resp = [r['text'] for r in response['choices']]
+#         else:
+#             resp = response['choices'][0]['text']
+
+#     return resp
+
+client = OpenAI()  # uses OPENAI_API_KEY from env
+
+
 @backoff.on_exception(backoff.expo, Exception, max_tries=10)
 def codex_helper(extended_prompt):
     assert 0 <= config.codex.temperature <= 1
-    assert 1 <= config.codex.best_of <= 20
 
-    if config.codex.model in ("gpt-4", "gpt-3.5-turbo"):
-        if not isinstance(extended_prompt, list):
-            extended_prompt = [extended_prompt]
-        responses = [openai.ChatCompletion.create(
-            model=config.codex.model,
-            messages=[
-                # {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "system", "content": "Only answer with a function starting def execute_command."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=config.codex.temperature,
-            max_tokens=config.codex.max_tokens,
-            top_p=1.,
-            frequency_penalty=0,
-            presence_penalty=0,
-            #                 best_of=config.codex.best_of,
-            stop=["\n\n"],
-        )
-            for prompt in extended_prompt]
-        resp = [r['choices'][0]['message']['content'].replace("execute_command(image)",
-                                                              "execute_command(image, my_fig, time_wait_between_lines, syntax)")
-                for r in responses]
-    #         if len(resp) == 1:
-    #             resp = resp[0]
+    # Normalize to a list
+    prompts = extended_prompt if isinstance(extended_prompt,
+                                            list) else [extended_prompt]
+
+    if config.codex.model in ("gpt-3.5-turbo", "gpt-4"):
+        # Chat Completions (v1.x style)
+        responses = []
+        for prompt in prompts:
+            r = client.chat.completions.create(
+                model=config.codex.model,
+                messages=[{
+                    "role":
+                    "system",
+                    "content":
+                    "Only answer with a function starting def execute_command."
+                }, {
+                    "role": "user",
+                    "content": prompt
+                }],
+                temperature=config.codex.temperature,
+                max_tokens=config.codex.max_tokens,
+                top_p=1.0,
+                # best_of is NOT supported for chat completions
+                stop=["\n\n"],
+            )
+            text = r.choices[0].message.content or ""
+            text = text.replace(
+                "execute_command(image)",
+                "execute_command(image, my_fig, time_wait_between_lines, syntax)"
+            )
+            responses.append(text)
+        return responses
     else:
-        warnings.warn('OpenAI Codex is deprecated. Please use GPT-4 or GPT-3.5-turbo.')
-        response = openai.Completion.create(
-            model="code-davinci-002",
-            temperature=config.codex.temperature,
-            prompt=extended_prompt,
-            max_tokens=config.codex.max_tokens,
-            top_p=1,
-            frequency_penalty=0,
-            presence_penalty=0,
-            best_of=config.codex.best_of,
-            stop=["\n\n"],
-        )
-
-        if isinstance(extended_prompt, list):
-            resp = [r['text'] for r in response['choices']]
-        else:
-            resp = response['choices'][0]['text']
-
-    return resp
+        # Completions/Codex path is deprecated; keep only if you truly need it
+        warnings.warn(
+            'OpenAI Codex is deprecated. Please use GPT-4 or GPT-3.5-turbo.')
+        # If you keep this, use a legacy-compatible SDK (<=0.28) separately.
+        raise RuntimeError("Legacy Codex path not supported on openai>=1.x")
 
 
 class CodexModel(BaseModel):
@@ -1020,9 +1241,16 @@ class CodexModel(BaseModel):
             with open(config.fixed_code_file) as f:
                 self.fixed_code = f.read()
 
-    def forward(self, prompt, input_type='image', prompt_file=None, base_prompt=None, extra_context=None):
+    def forward(self,
+                prompt,
+                input_type='image',
+                prompt_file=None,
+                base_prompt=None,
+                extra_context=None):
+        extra_context = "" if extra_context is None else str(extra_context)
         if config.use_fixed_code:  # Use the same program for every sample, like in socratic models
-            return [self.fixed_code] * len(prompt) if isinstance(prompt, list) else self.fixed_code
+            return [self.fixed_code] * len(prompt) if isinstance(
+                prompt, list) else self.fixed_code
 
         if prompt_file is not None and base_prompt is None:  # base_prompt takes priority
             with open(prompt_file) as f:
@@ -1031,14 +1259,18 @@ class CodexModel(BaseModel):
             base_prompt = self.base_prompt
 
         if isinstance(prompt, list):
-            extended_prompt = [base_prompt.replace("INSERT_QUERY_HERE", p).
-                               replace('INSERT_TYPE_HERE', input_type).
-                               replace('EXTRA_CONTEXT_HERE', str(ec))
-                               for p, ec in zip(prompt, extra_context)]
+            extended_prompt = [
+                base_prompt.replace("INSERT_QUERY_HERE", p).replace(
+                    'INSERT_TYPE_HERE',
+                    input_type).replace('EXTRA_CONTEXT_HERE', str(ec))
+                for p, ec in zip(prompt, extra_context)
+            ]
         elif isinstance(prompt, str):
-            extended_prompt = [base_prompt.replace("INSERT_QUERY_HERE", prompt).
-                               replace('INSERT_TYPE_HERE', input_type).
-                               replace('EXTRA_CONTEXT_HERE', extra_context)]
+            extended_prompt = [
+                base_prompt.replace("INSERT_QUERY_HERE", prompt).replace(
+                    'INSERT_TYPE_HERE',
+                    input_type).replace('EXTRA_CONTEXT_HERE', extra_context)
+            ]
         else:
             raise TypeError("prompt must be a string or a list of strings")
 
@@ -1052,14 +1284,17 @@ class CodexModel(BaseModel):
         if len(extended_prompt) > self.max_batch_size:
             response = []
             for i in range(0, len(extended_prompt), self.max_batch_size):
-                response += self.forward_(extended_prompt[i:i + self.max_batch_size])
+                response += self.forward_(extended_prompt[i:i +
+                                                          self.max_batch_size])
             return response
         try:
             response = codex_helper(extended_prompt)
-        except openai.error.RateLimitError as e:
+        except RateLimitError as e:
             print("Retrying Codex, splitting batch")
             if len(extended_prompt) == 1:
-                warnings.warn("This is taking too long, maybe OpenAI is down? (status.openai.com/)")
+                warnings.warn(
+                    "This is taking too long, maybe OpenAI is down? (status.openai.com/)"
+                )
             # Will only be here after the number of retries in the backoff decorator.
             # It probably means a single batch takes up the entire rate limit.
             sub_batch_1 = extended_prompt[:len(extended_prompt) // 2]
@@ -1101,10 +1336,16 @@ class CodeLlama(CodexModel):
             assert os.path.exists(model_id), \
                 f'Model path {model_id} does not exist. If you use the model ID it will be downloaded automatically'
         else:
-            assert model_id in ['codellama/CodeLlama-7b-hf', 'codellama/CodeLlama-13b-hf', 'codellama/CodeLlama-34b-hf',
-                                'codellama/CodeLlama-7b-Python-hf', 'codellama/CodeLlama-13b-Python-hf',
-                                'codellama/CodeLlama-34b-Python-hf', 'codellama/CodeLlama-7b-Instruct-hf',
-                                'codellama/CodeLlama-13b-Instruct-hf', 'codellama/CodeLlama-34b-Instruct-hf']
+            assert model_id in [
+                'codellama/CodeLlama-7b-hf', 'codellama/CodeLlama-13b-hf',
+                'codellama/CodeLlama-34b-hf',
+                'codellama/CodeLlama-7b-Python-hf',
+                'codellama/CodeLlama-13b-Python-hf',
+                'codellama/CodeLlama-34b-Python-hf',
+                'codellama/CodeLlama-7b-Instruct-hf',
+                'codellama/CodeLlama-13b-Instruct-hf',
+                'codellama/CodeLlama-34b-Instruct-hf'
+            ]
         self.tokenizer = CodeLlamaTokenizer.from_pretrained(model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
         self.tokenizer.padding_side = 'left'
@@ -1116,7 +1357,8 @@ class CodeLlama(CodexModel):
         max_memory = {}
         for gpu_number in range(torch.cuda.device_count()):
             mem_available = torch.cuda.mem_get_info(f'cuda:{gpu_number}')[0]
-            if mem_available <= leave_empty * torch.cuda.get_device_properties(gpu_number).total_memory:
+            if mem_available <= leave_empty * torch.cuda.get_device_properties(
+                    gpu_number).total_memory:
                 mem_available = 0
             max_memory[gpu_number] = mem_available * usage_ratio
             if gpu_number == 0:
@@ -1131,10 +1373,17 @@ class CodeLlama(CodexModel):
         self.model.eval()
 
     def run_codellama(self, prompt):
-        input_ids = self.tokenizer(prompt, return_tensors="pt", padding=True, truncation=True)["input_ids"]
-        generated_ids = self.model.generate(input_ids.to("cuda"), max_new_tokens=128)
+        input_ids = self.tokenizer(prompt,
+                                   return_tensors="pt",
+                                   padding=True,
+                                   truncation=True)["input_ids"]
+        generated_ids = self.model.generate(input_ids.to("cuda"),
+                                            max_new_tokens=128)
         generated_ids = generated_ids[:, input_ids.shape[-1]:]
-        generated_text = [self.tokenizer.decode(gen_id, skip_special_tokens=True) for gen_id in generated_ids]
+        generated_text = [
+            self.tokenizer.decode(gen_id, skip_special_tokens=True)
+            for gen_id in generated_ids
+        ]
         generated_text = [text.split('\n\n')[0] for text in generated_text]
         return generated_text
 
@@ -1142,7 +1391,8 @@ class CodeLlama(CodexModel):
         if len(extended_prompt) > self.max_batch_size:
             response = []
             for i in range(0, len(extended_prompt), self.max_batch_size):
-                response += self.forward_(extended_prompt[i:i + self.max_batch_size])
+                response += self.forward_(extended_prompt[i:i +
+                                                          self.max_batch_size])
             return response
         with torch.no_grad():
             response = self.run_codellama(extended_prompt)
@@ -1157,7 +1407,9 @@ class BLIPModel(BaseModel):
     max_batch_size = 32
     seconds_collect_data = 0.2  # The queue has additionally the time it is executing the previous forward pass
 
-    def __init__(self, gpu_number=0, half_precision=config.blip_half_precision,
+    def __init__(self,
+                 gpu_number=0,
+                 half_precision=config.blip_half_precision,
                  blip_v2_model_type=config.blip_v2_model_type):
         super().__init__(gpu_number)
 
@@ -1165,25 +1417,33 @@ class BLIPModel(BaseModel):
         from transformers import Blip2Processor, Blip2ForConditionalGeneration
 
         # https://huggingface.co/models?sort=downloads&search=Salesforce%2Fblip2-
-        assert blip_v2_model_type in ['blip2-flan-t5-xxl', 'blip2-flan-t5-xl', 'blip2-opt-2.7b', 'blip2-opt-6.7b',
-                                      'blip2-opt-2.7b-coco', 'blip2-flan-t5-xl-coco', 'blip2-opt-6.7b-coco']
+        assert blip_v2_model_type in [
+            'blip2-flan-t5-xxl', 'blip2-flan-t5-xl', 'blip2-opt-2.7b',
+            'blip2-opt-6.7b', 'blip2-opt-2.7b-coco', 'blip2-flan-t5-xl-coco',
+            'blip2-opt-6.7b-coco'
+        ]
 
-        with warnings.catch_warnings(), HiddenPrints("BLIP"), torch.cuda.device(self.dev):
+        with warnings.catch_warnings(), HiddenPrints(
+                "BLIP"), torch.cuda.device(self.dev):
             max_memory = {gpu_number: torch.cuda.mem_get_info(self.dev)[0]}
 
-            self.processor = Blip2Processor.from_pretrained(f"Salesforce/{blip_v2_model_type}")
+            self.processor = Blip2Processor.from_pretrained(
+                f"Salesforce/{blip_v2_model_type}")
             # Device_map must be sequential for manual GPU selection
             try:
                 self.model = Blip2ForConditionalGeneration.from_pretrained(
-                    f"Salesforce/{blip_v2_model_type}", load_in_8bit=half_precision,
+                    f"Salesforce/{blip_v2_model_type}",
+                    load_in_8bit=half_precision,
                     torch_dtype=torch.float16 if half_precision else "auto",
-                    device_map="sequential", max_memory=max_memory
-                )
+                    device_map="sequential",
+                    max_memory=max_memory)
             except Exception as e:
                 # Clarify error message. The problem is that it tries to load part of the model to disk.
                 if "had weights offloaded to the disk" in e.args[0]:
                     extra_text = ' You may want to consider setting half_precision to True.' if half_precision else ''
-                    raise MemoryError(f"Not enough GPU memory in GPU {self.dev} to load the model.{extra_text}")
+                    raise MemoryError(
+                        f"Not enough GPU memory in GPU {self.dev} to load the model.{extra_text}"
+                    )
                 else:
                     raise e
 
@@ -1194,12 +1454,24 @@ class BLIPModel(BaseModel):
 
     @torch.no_grad()
     def caption(self, image, prompt=None):
-        inputs = self.processor(images=image, text=prompt, return_tensors="pt").to(self.dev, torch.float16)
-        generated_ids = self.model.generate(**inputs, length_penalty=1., num_beams=5, max_length=30, min_length=1,
-                                            do_sample=False, top_p=0.9, repetition_penalty=1.0,
-                                            num_return_sequences=1, temperature=1)
-        generated_text = [cap.strip() for cap in
-                          self.processor.batch_decode(generated_ids, skip_special_tokens=True)]
+        inputs = self.processor(images=image, text=prompt,
+                                return_tensors="pt").to(
+                                    self.dev, torch.float16)
+        generated_ids = self.model.generate(**inputs,
+                                            length_penalty=1.,
+                                            num_beams=5,
+                                            max_length=30,
+                                            min_length=1,
+                                            do_sample=False,
+                                            top_p=0.9,
+                                            repetition_penalty=1.0,
+                                            num_return_sequences=1,
+                                            temperature=1)
+        generated_text = [
+            cap.strip()
+            for cap in self.processor.batch_decode(generated_ids,
+                                                   skip_special_tokens=True)
+        ]
         return generated_text
 
     def pre_question(self, question):
@@ -1214,19 +1486,30 @@ class BLIPModel(BaseModel):
         # truncate question
         question_words = question.split(" ")
         if len(question_words) > self.max_words:
-            question = " ".join(question_words[: self.max_words])
+            question = " ".join(question_words[:self.max_words])
 
         return question
 
     @torch.no_grad()
     def qa(self, image, question):
-        inputs = self.processor(images=image, text=question, return_tensors="pt", padding="longest").to(self.dev)
+        inputs = self.processor(images=image,
+                                text=question,
+                                return_tensors="pt",
+                                padding="longest").to(self.dev)
         if self.half_precision:
             inputs['pixel_values'] = inputs['pixel_values'].half()
-        generated_ids = self.model.generate(**inputs, length_penalty=-1, num_beams=5, max_length=10, min_length=1,
-                                            do_sample=False, top_p=0.9, repetition_penalty=1.0,
-                                            num_return_sequences=1, temperature=1)
-        generated_text = self.processor.batch_decode(generated_ids, skip_special_tokens=True)
+        generated_ids = self.model.generate(**inputs,
+                                            length_penalty=-1,
+                                            num_beams=5,
+                                            max_length=10,
+                                            min_length=1,
+                                            do_sample=False,
+                                            top_p=0.9,
+                                            repetition_penalty=1.0,
+                                            num_return_sequences=1,
+                                            temperature=1)
+        generated_text = self.processor.batch_decode(generated_ids,
+                                                     skip_special_tokens=True)
 
         return generated_text
 
@@ -1234,17 +1517,25 @@ class BLIPModel(BaseModel):
         if not self.to_batch:
             image, question, task = [image], [question], [task]
 
-        if len(image) > 0 and 'float' in str(image[0].dtype) and image[0].max() <= 1:
+        if len(image) > 0 and 'float' in str(
+                image[0].dtype) and image[0].max() <= 1:
             image = [im * 255 for im in image]
 
         # Separate into qa and caption batches.
-        prompts_qa = [self.qa_prompt.format(self.pre_question(q)) for q, t in zip(question, task) if t == 'qa']
+        prompts_qa = [
+            self.qa_prompt.format(self.pre_question(q))
+            for q, t in zip(question, task) if t == 'qa'
+        ]
         images_qa = [im for i, im in enumerate(image) if task[i] == 'qa']
-        images_caption = [im for i, im in enumerate(image) if task[i] == 'caption']
+        images_caption = [
+            im for i, im in enumerate(image) if task[i] == 'caption'
+        ]
 
         with torch.cuda.device(self.dev):
-            response_qa = self.qa(images_qa, prompts_qa) if len(images_qa) > 0 else []
-            response_caption = self.caption(images_caption) if len(images_caption) > 0 else []
+            response_qa = self.qa(images_qa,
+                                  prompts_qa) if len(images_qa) > 0 else []
+            response_caption = self.caption(images_caption) if len(
+                images_caption) > 0 else []
 
         response = []
         for t in task:
@@ -1261,8 +1552,11 @@ class BLIPModel(BaseModel):
 class SaliencyModel(BaseModel):
     name = 'saliency'
 
-    def __init__(self, gpu_number=0,
-                 path_checkpoint=f'{config.path_pretrained_models}/saliency_inspyrenet_plus_ultra'):
+    def __init__(
+        self,
+        gpu_number=0,
+        path_checkpoint=f'{config.path_pretrained_models}/saliency_inspyrenet_plus_ultra'
+    ):
         from base_models.inspyrenet.saliency_transforms import get_transform
         from base_models.inspyrenet.InSPyReNet import InSPyReNet
         from base_models.inspyrenet.backbones.SwinTransformer import SwinB
@@ -1274,30 +1568,45 @@ class SaliencyModel(BaseModel):
         base_size = [384, 384]
         kwargs = {'name': 'InSPyReNet_SwinB', 'threshold': 512}
         with HiddenPrints("Saliency"):
-            model = InSPyReNet(SwinB(pretrained=pretrained, path_pretrained_models=config.path_pretrained_models),
-                               [128, 128, 256, 512, 1024], depth, base_size, **kwargs)
-            model.load_state_dict(torch.load(os.path.join(path_checkpoint, 'latest.pth'),
-                                             map_location=torch.device('cpu')), strict=True)
+            model = InSPyReNet(
+                SwinB(pretrained=pretrained,
+                      path_pretrained_models=config.path_pretrained_models),
+                [128, 128, 256, 512, 1024], depth, base_size, **kwargs)
+            model.load_state_dict(torch.load(os.path.join(
+                path_checkpoint, 'latest.pth'),
+                                             map_location=torch.device('cpu')),
+                                  strict=True)
         model = model.to(self.dev)
         model.eval()
 
         self.model = model
         self.transform_pil = transforms.ToPILImage()
         self.transform = get_transform({
-            'static_resize': {'size': [384, 384]},
-            'dynamic_resize': {'L': 1280},
+            'static_resize': {
+                'size': [384, 384]
+            },
+            'dynamic_resize': {
+                'L': 1280
+            },
             'tonumpy': None,
-            'normalize': {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]},
+            'normalize': {
+                'mean': [0.485, 0.456, 0.406],
+                'std': [0.229, 0.224, 0.225]
+            },
             'totensor': None
         })
 
     @torch.no_grad()
     def forward(self, image):
         image_t = self.transform({'image': self.transform_pil(image)})
-        image_t['image_resized'] = image_t['image_resized'].unsqueeze(0).to(self.dev)
+        image_t['image_resized'] = image_t['image_resized'].unsqueeze(0).to(
+            self.dev)
         image_t['image'] = image_t['image'].unsqueeze(0).to(self.dev)
         pred = self.model(image_t)['pred']
-        pred_resized = F.interpolate(pred, image.shape[1:], mode='bilinear', align_corners=True)[0, 0]
+        pred_resized = F.interpolate(pred,
+                                     image.shape[1:],
+                                     mode='bilinear',
+                                     align_corners=True)[0, 0]
         mask_foreground = pred_resized < 0.5
         image_masked = image.clone()
         image_masked[:, mask_foreground] = 0
@@ -1308,8 +1617,11 @@ class SaliencyModel(BaseModel):
 class XVLMModel(BaseModel):
     name = 'xvlm'
 
-    def __init__(self, gpu_number=0,
-                 path_checkpoint=f'{config.path_pretrained_models}/xvlm/retrieval_mscoco_checkpoint_9.pth'):
+    def __init__(
+        self,
+        gpu_number=0,
+        path_checkpoint=f'{config.path_pretrained_models}/xvlm/retrieval_mscoco_checkpoint_9.pth'
+    ):
 
         from base_models.xvlm.xvlm import XVLMBase
         from transformers import BertTokenizer
@@ -1336,9 +1648,12 @@ class XVLMModel(BaseModel):
             'num_heads': [4, 8, 16, 32]
         }
         with warnings.catch_warnings(), HiddenPrints("XVLM"):
-            model = XVLMBase(config_xvlm, use_contrastive_loss=True, vision_config=vision_config)
+            model = XVLMBase(config_xvlm,
+                             use_contrastive_loss=True,
+                             vision_config=vision_config)
             checkpoint = torch.load(path_checkpoint, map_location='cpu')
-            state_dict = checkpoint['model'] if 'model' in checkpoint.keys() else checkpoint
+            state_dict = checkpoint['model'] if 'model' in checkpoint.keys(
+            ) else checkpoint
             msg = model.load_state_dict(state_dict, strict=False)
         if len(msg.missing_keys) > 0:
             print('XVLM Missing keys: ', msg.missing_keys)
@@ -1349,10 +1664,12 @@ class XVLMModel(BaseModel):
         self.model = model
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
-        normalize = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
+        normalize = transforms.Normalize((0.48145466, 0.4578275, 0.40821073),
+                                         (0.26862954, 0.26130258, 0.27577711))
         self.transform = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize((image_res, image_res), interpolation=Image.BICUBIC),
+            transforms.Resize((image_res, image_res),
+                              interpolation=Image.BICUBIC),
             transforms.ToTensor(),
             normalize,
         ])
@@ -1399,13 +1716,16 @@ class XVLMModel(BaseModel):
         images = torch.stack(images, dim=0).to(self.dev)
 
         texts = [self.pre_caption(text, self.max_words) for text in texts]
-        text_input = self.tokenizer(texts, padding='longest', return_tensors="pt").to(self.dev)
+        text_input = self.tokenizer(texts,
+                                    padding='longest',
+                                    return_tensors="pt").to(self.dev)
 
         image_embeds, image_atts = self.model.get_vision_embeds(images)
         text_ids, text_atts = text_input.input_ids, text_input.attention_mask
         text_embeds = self.model.get_text_embeds(text_ids, text_atts)
 
-        image_feat, text_feat = self.model.get_features(image_embeds, text_embeds)
+        image_feat, text_feat = self.model.get_features(
+            image_embeds, text_embeds)
         logits = image_feat @ text_feat.t()
 
         return logits
@@ -1415,13 +1735,17 @@ class XVLMModel(BaseModel):
         # Compare with a pre-defined set of negatives
         texts = [text] + negative_categories
         sim = 100 * self.score(image, texts)[0]
-        res = F.softmax(torch.cat((sim[0].broadcast_to(1, sim.shape[0] - 1),
-                                   sim[1:].unsqueeze(0)), dim=0), dim=0)[0].mean()
+        res = F.softmax(torch.cat(
+            (sim[0].broadcast_to(1, sim.shape[0] - 1), sim[1:].unsqueeze(0)),
+            dim=0),
+                        dim=0)[0].mean()
         return res
 
     def forward(self, image, text, task='score', negative_categories=None):
         if task == 'score':
             score = self.score(image, text)
         else:  # binary
-            score = self.binary_score(image, text, negative_categories=negative_categories)
+            score = self.binary_score(image,
+                                      text,
+                                      negative_categories=negative_categories)
         return score.cpu()

@@ -32,14 +32,18 @@ mp.set_start_method('spawn', force=True)
 from vision_processes import forward, finish_all_consumers  # This import loads all the models. May take a while
 from image_patch import *
 from video_segment import *
-from datasets.dataset import MyDataset
+from datasets.my_dataset import MyDataset
 
 console = Console(highlight=False, force_terminal=False)
 
 time_wait_between_lines = 0.5
 
 
-def inject_saver(code, show_intermediate_steps, syntax=None, time_wait_between_lines=None, console=None):
+def inject_saver(code,
+                 show_intermediate_steps,
+                 syntax=None,
+                 time_wait_between_lines=None,
+                 console=None):
     injected_function_name = 'show_all'
     if injected_function_name in code:
         return code
@@ -48,14 +52,17 @@ def inject_saver(code, show_intermediate_steps, syntax=None, time_wait_between_l
     for n, codeline in enumerate(code):
         codeline, indent = split_codeline_and_indent_level(codeline)
 
-        if codeline.startswith('#') or codeline == '':  # this will cause issues if you have lots of comment lines
+        if codeline.startswith(
+                '#'
+        ) or codeline == '':  # this will cause issues if you have lots of comment lines
             continue
         if '#' in codeline:
             codeline = codeline.split('#')[0]
 
         thing_to_show, code_type = get_thing_to_show_codetype(codeline)
 
-        if code_type in ('assign', 'append', 'if', 'return', 'for', 'sort', 'add'):
+        if code_type in ('assign', 'append', 'if', 'return', 'for', 'sort',
+                         'add'):
             if '\'' in codeline:
                 codeline.replace('\'', '\\\'')
 
@@ -72,14 +79,18 @@ def inject_saver(code, show_intermediate_steps, syntax=None, time_wait_between_l
 
             extension_list = []
             if isinstance(thing_to_show, list):
-                injection_string_list = [injection_string_format(f"{thing}") for thing in thing_to_show]
+                injection_string_list = [
+                    injection_string_format(f"{thing}")
+                    for thing in thing_to_show
+                ]
                 extension_list.extend(injection_string_list)
             elif code_type == 'for':
                 injection_string = injection_string_format(f"{thing_to_show}")
                 injection_string = " " * 4 + injection_string
                 extension_list.append(injection_string)
             else:
-                extension_list.append(injection_string_format(f"{thing_to_show}"))
+                extension_list.append(
+                    injection_string_format(f"{thing_to_show}"))
 
             if code_type in ('if', 'return'):
                 extension_list = extension_list + [f"{indent}{codeline}"]
@@ -156,11 +167,17 @@ def get_thing_to_show_codetype(codeline):
         code_type = 'other'
 
     if isinstance(thing_to_show, list):
-        thing_to_show = [thing if not (thing.strip().startswith("'") and thing.strip().endswith("'"))
-                         else thing.replace("'", '"') for thing in thing_to_show if thing is not None]
+        thing_to_show = [
+            thing if
+            not (thing.strip().startswith("'") and thing.strip().endswith("'"))
+            else thing.replace("'", '"') for thing in thing_to_show
+            if thing is not None
+        ]
     elif isinstance(thing_to_show, str):
-        thing_to_show = thing_to_show if not (thing_to_show.strip().startswith("'") and
-                                              thing_to_show.strip().endswith("'")) else thing_to_show.replace("'", '"')
+        thing_to_show = thing_to_show if not (
+            thing_to_show.strip().startswith("'") and
+            thing_to_show.strip().endswith("'")) else thing_to_show.replace(
+                "'", '"')
     return thing_to_show, code_type
 
 
@@ -187,7 +204,14 @@ def CodexAtLine(lineno, syntax, time_wait_between_lines=1.):
     time.sleep(time_wait_between_lines)
 
 
-def show_all(lineno, value, valuename, fig=None, usefig=True, disp=True, console_in=None, time_wait_between_lines=None,
+def show_all(lineno,
+             value,
+             valuename,
+             fig=None,
+             usefig=True,
+             disp=True,
+             console_in=None,
+             time_wait_between_lines=None,
              lastlineno=[-1]):
     time.sleep(0.1)  # to avoid race condition!
 
@@ -217,7 +241,12 @@ def show_all(lineno, value, valuename, fig=None, usefig=True, disp=True, console
         if len(thing_to_show) > 0:
             for i, thing in enumerate(thing_to_show):
                 disp_ = disp or i < len(thing_to_show) - 1
-                show_all(None, thing, f"{rich_escape(valuename)}[{i}]", fig=fig, disp=disp_, usefig=usefig)
+                show_all(None,
+                         thing,
+                         f"{rich_escape(valuename)}[{i}]",
+                         fig=fig,
+                         disp=disp_,
+                         usefig=usefig)
             return
         else:
             console_in.print(f"{rich_escape(valuename)} is empty")
@@ -225,7 +254,12 @@ def show_all(lineno, value, valuename, fig=None, usefig=True, disp=True, console
         if len(thing_to_show) > 0:
             for i, (thing_k, thing_v) in enumerate(thing_to_show.items()):
                 disp_ = disp or i < len(thing_to_show) - 1
-                show_all(None, thing_v, f"{rich_escape(valuename)}['{thing_k}']", fig=fig, disp=disp_, usefig=usefig)
+                show_all(None,
+                         thing_v,
+                         f"{rich_escape(valuename)}['{thing_k}']",
+                         fig=fig,
+                         disp=disp_,
+                         usefig=usefig)
             return
         else:
             console_in.print(f"{rich_escape(valuename)} is empty")
@@ -256,31 +290,54 @@ def get_code(query):
     model_name_codex = 'codellama' if config.codex.model == 'codellama' else 'codex'
     code = forward(model_name_codex, prompt=query, input_type="image")
     if config.codex.model not in ('gpt-3.5-turbo', 'gpt-4'):
-        code = f'def execute_command(image, my_fig, time_wait_between_lines, syntax):' + code # chat models give execute_command due to system behaviour
-    code_for_syntax = code.replace("(image, my_fig, time_wait_between_lines, syntax)", "(image)")
-    syntax_1 = Syntax(code_for_syntax, "python", theme="monokai", line_numbers=True, start_line=0)
+        code = f'def execute_command(image, my_fig, time_wait_between_lines, syntax):' + code  # chat models give execute_command due to system behaviour
+    code_for_syntax = code.replace(
+        "(image, my_fig, time_wait_between_lines, syntax)", "(image)")
+    syntax_1 = Syntax(code_for_syntax,
+                      "python",
+                      theme="monokai",
+                      line_numbers=True,
+                      start_line=0)
     console.print(syntax_1)
     code = ast.unparse(ast.parse(code))
-    code_for_syntax_2 = code.replace("(image, my_fig, time_wait_between_lines, syntax)", "(image)")
-    syntax_2 = Syntax(code_for_syntax_2, "python", theme="monokai", line_numbers=True, start_line=0)
+    code_for_syntax_2 = code.replace(
+        "(image, my_fig, time_wait_between_lines, syntax)", "(image)")
+    syntax_2 = Syntax(code_for_syntax_2,
+                      "python",
+                      theme="monokai",
+                      line_numbers=True,
+                      start_line=0)
     return code, syntax_2
 
 
 def execute_code(code, im, show_intermediate_steps=True):
     code, syntax = code
-    code_line = inject_saver(code, show_intermediate_steps, syntax, time_wait_between_lines, console)
+    code_line = inject_saver(code, show_intermediate_steps, syntax,
+                             time_wait_between_lines, console)
 
-    display(HTML("<style>.output_wrapper, .output {height:auto !important; max-height:1000000px;}</style>"))
+    display(
+        HTML(
+            "<style>.output_wrapper, .output {height:auto !important; max-height:1000000px;}</style>"
+        ))
 
-    with Live(Padding(syntax, 1), refresh_per_second=10, console=console, auto_refresh=True) as live:
+    with Live(Padding(syntax, 1),
+              refresh_per_second=10,
+              console=console,
+              auto_refresh=True) as live:
         my_fig = plt.figure(figsize=(4, 4))
         try:
             exec(compile(code_line, 'Codex', 'exec'), globals())
-            result = execute_command(im, my_fig, time_wait_between_lines, syntax)  # The code is created in the exec()
+            result = execute_command(
+                im, my_fig, time_wait_between_lines,
+                syntax)  # The code is created in the exec()
         except Exception as e:
-            print(f"Encountered error {e} when trying to run with visualizations. Trying from scratch.")
+            print(
+                f"Encountered error {e} when trying to run with visualizations. Trying from scratch."
+            )
             exec(compile(code, 'Codex', 'exec'), globals())
-            result = execute_command(im, my_fig, time_wait_between_lines, syntax)  # The code is created in the exec()
+            result = execute_command(
+                im, my_fig, time_wait_between_lines,
+                syntax)  # The code is created in the exec()
 
         plt.close(my_fig)
 
@@ -306,11 +363,19 @@ def execute_code(code, im, show_intermediate_steps=True):
         usefig = True
 
     console.rule(f"[bold]Final Result[/bold]", style="chartreuse2")
-    show_all(None, result, 'Result', fig=f, usefig=usefig, disp=False, console_in=console, time_wait_between_lines=0)
+    show_all(None,
+             result,
+             'Result',
+             fig=f,
+             usefig=usefig,
+             disp=False,
+             console_in=console,
+             time_wait_between_lines=0)
 
 
 def show_single_image(im):
-    im = Image.fromarray((im.detach().cpu().numpy().transpose(1, 2, 0) * 255).astype("uint8"))
+    im = Image.fromarray(
+        (im.detach().cpu().numpy().transpose(1, 2, 0) * 255).astype("uint8"))
     im.copy()
     im.thumbnail((400, 400))
     display(im)
