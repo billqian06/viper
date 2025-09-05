@@ -21,7 +21,7 @@ def load_file(file_name):
     if os.path.splitext(file_name)[-1] == '.csv':
         return pd.read_csv(file_name)
     with open(file_name, 'r') as fp:
-        if os.path.splitext(file_name)[1]== '.txt':
+        if os.path.splitext(file_name)[1] == '.txt':
             annos = fp.readlines()
             annos = [line.rstrip() for line in annos]
         if os.path.splitext(file_name)[1] == '.json':
@@ -46,8 +46,17 @@ def save_file(obj, filename):
 
 
 class NExTQADataset(Dataset):
-    def __init__(self, split, data_path="", tokenize=None, max_samples=None, version='openended', fps=30,
-                 max_num_frames=30, start_sample=0, **kwargs):
+
+    def __init__(self,
+                 split,
+                 data_path="",
+                 tokenize=None,
+                 max_samples=None,
+                 version='openended',
+                 fps=30,
+                 max_num_frames=30,
+                 start_sample=0,
+                 **kwargs):
 
         assert version in ['openended', 'multiplechoice']
         directory = 'nextqa' if version == 'multiplechoice' else 'nextoe'
@@ -60,37 +69,52 @@ class NExTQADataset(Dataset):
         self.input_type = 'video'
         self.max_num_frames = max_num_frames
 
-        sample_list_path = os.path.join(self.data_path, directory, f'{split}.csv')
+        sample_list_path = os.path.join(self.data_path, directory,
+                                        f'{split}.csv')
         self.sample_list = load_file(sample_list_path)
 
         if max_samples is not None:
             # self.sample_list = self.sample_list.sample(n=max_samples)
-            self.sample_list = self.sample_list[start_sample:start_sample+max_samples]
+            self.sample_list = self.sample_list[start_sample:start_sample +
+                                                max_samples]
 
         self.sample_ids = self.sample_list.index
-        self.sample_id_to_index = {sample_id: idx for idx, sample_id in enumerate(self.sample_ids)}
+        self.sample_id_to_index = {
+            sample_id: idx
+            for idx, sample_id in enumerate(self.sample_ids)
+        }
 
         self.video_to_dir = {}
-        for directory in os.listdir(os.path.join(self.data_path, 'videos')):
-            for video in os.listdir(os.path.join(self.data_path, 'videos', directory)):
-                self.video_to_dir[video.split('.')[0]] = directory
+        # for directory in os.listdir(os.path.join(self.data_path, 'videos')):
+        #     for video in os.listdir(os.path.join(self.data_path, 'videos', directory)):
+        #         self.video_to_dir[video.split('.')[0]] = directory
+        for fname in os.listdir(os.path.join(self.data_path, 'NExTVideo')):
+            if fname.endswith('.mp4'):
+                self.video_to_dir[fname.split('.')[0]] = ''
 
     def get_sample_path(self, index):
         sample_id = self.sample_ids[index]
         cur_sample = self.sample_list.loc[sample_id]
         video_name = str(cur_sample['video'])
-        video_path = os.path.join(self.data_path, 'videos', self.video_to_dir[video_name], video_name + '.mp4')
+        # video_path = os.path.join(self.data_path, 'videos',
+        #                           self.video_to_dir[video_name],
+        #                           video_name + '.mp4')
+        video_path = os.path.join(self.data_path, 'NExTVideo',
+                                  video_name + '.mp4')
         return video_path
 
     def get_video(self, video_path):
         # If fixed width and height are required, VideoReader takes width and height as arguments.
-        video_reader = decord.VideoReader(video_path, num_threads=1, ctx=cpu(0))
+        video_reader = decord.VideoReader(video_path,
+                                          num_threads=1,
+                                          ctx=cpu(0))
         decord.bridge.set_bridge('torch')
         vlen = len(video_reader)
         original_fps = video_reader.get_avg_fps()
         num_frames = int(vlen * self.fps / original_fps)
         num_frames = min(self.max_num_frames, num_frames)
-        frame_idxs = np.linspace(0, vlen, num_frames, endpoint=False).astype(np.int)
+        frame_idxs = np.linspace(0, vlen, num_frames,
+                                 endpoint=False).astype(np.int)
         video = video_reader.get_batch(frame_idxs).byte()
         video = video.permute(0, 3, 1, 2)
         return video
@@ -104,7 +128,9 @@ class NExTQADataset(Dataset):
             question = self.tokenize(question)
 
         video_name = str(cur_sample['video'])
-        video_path = os.path.join(self.data_path, 'videos', self.video_to_dir[video_name], video_name + '.mp4')
+        video_path = os.path.join(self.data_path, 'videos',
+                                  self.video_to_dir[video_name],
+                                  video_name + '.mp4')
         video = self.get_video(video_path)
 
         if self.version == 'openended':
@@ -119,9 +145,17 @@ class NExTQADataset(Dataset):
 
         query_type = str(cur_sample['type'])
 
-        out_dict = {"sample_id": sample_id, "answer": answer, "image": video, "query": question, 'pil_img': -1,
-                    "query_type": query_type, 'index': idx, 'possible_answers': possible_answers,
-                    'extra_context': possible_answers}
+        out_dict = {
+            "sample_id": sample_id,
+            "answer": answer,
+            "image": video,
+            "query": question,
+            'pil_img': -1,
+            "query_type": query_type,
+            'index': idx,
+            'possible_answers': possible_answers,
+            'extra_context': possible_answers
+        }
 
         return out_dict
 
@@ -135,7 +169,11 @@ class NExTQADataset(Dataset):
         sample_id = self.sample_ids[index]
         cur_sample = self.sample_list.loc[sample_id]
         video_name = str(cur_sample['video'])
-        video_path = os.path.join(self.data_path, 'videos', self.video_to_dir[video_name], video_name + '.mp4')
+        # video_path = os.path.join(self.data_path, 'videos',
+        #                           self.video_to_dir[video_name],
+        #                           video_name + '.mp4')
+        video_path = os.path.join(self.data_path, 'NExTVideo',
+                                  video_name + '.mp4')
         return video_path
 
     def accuracy(self, prediction, ground_truth, possible_answers, query_type):
@@ -175,7 +213,9 @@ class NExTQADataset(Dataset):
                         for pp in p:
                             if pp not in a:
                                 pred_tokens = nlp(pp)
-                                a.sort(key=lambda x: pred_tokens.similarity(nlp(x)), reverse=True)
+                                a.sort(key=lambda x: pred_tokens.similarity(
+                                    nlp(x)),
+                                       reverse=True)
                                 pp = a[0]
                             all_answers.append(pp)
                         # Majority vote
@@ -190,7 +230,8 @@ class NExTQADataset(Dataset):
                         print('None case')  # Should not happen
                     else:
                         pred_tokens = nlp(p)
-                        a.sort(key=lambda x: pred_tokens.similarity(nlp(x)), reverse=True)
+                        a.sort(key=lambda x: pred_tokens.similarity(nlp(x)),
+                               reverse=True)
                     p = a[0]
                 if p == g:
                     score += 1
@@ -243,7 +284,7 @@ def wup(word1, word2, alpha):
         word_sim = 0.0
 
     if word_sim < alpha:
-        word_sim = 0.1*word_sim
+        word_sim = 0.1 * word_sim
     return word_sim
 
 
