@@ -320,26 +320,24 @@ def execute_code(code, im, show_intermediate_steps=True):
             "<style>.output_wrapper, .output {height:auto !important; max-height:1000000px;}</style>"
         ))
 
-    with Live(Padding(syntax, 1),
-              refresh_per_second=10,
-              console=console,
-              auto_refresh=True) as live:
-        my_fig = plt.figure(figsize=(4, 4))
-        try:
-            exec(compile(code_line, 'Codex', 'exec'), globals())
-            result = execute_command(
-                im, my_fig, time_wait_between_lines,
-                syntax)  # The code is created in the exec()
-        except Exception as e:
-            print(
-                f"Encountered error {e} when trying to run with visualizations. Trying from scratch."
-            )
-            exec(compile(code, 'Codex', 'exec'), globals())
-            result = execute_command(
-                im, my_fig, time_wait_between_lines,
-                syntax)  # The code is created in the exec()
+    # with Live(Padding(syntax, 1),
+    #           refresh_per_second=10,
+    #           console=console,
+    #           auto_refresh=True) as live:
+    my_fig = plt.figure(figsize=(4, 4))
+    try:
+        exec(compile(code_line, 'Codex', 'exec'), globals())
+        result = execute_command(im, my_fig, time_wait_between_lines,
+                                 syntax)  # The code is created in the exec()
+    except Exception as e:
+        print(
+            f"Encountered error {e} when trying to run with visualizations. Trying from scratch."
+        )
+        exec(compile(code, 'Codex', 'exec'), globals())
+        result = execute_command(im, my_fig, time_wait_between_lines,
+                                 syntax)  # The code is created in the exec()
 
-        plt.close(my_fig)
+    plt.close(my_fig)
 
     def is_not_fig(x):
         if x is None:
