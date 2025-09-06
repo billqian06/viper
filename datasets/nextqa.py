@@ -128,8 +128,10 @@ class NExTQADataset(Dataset):
             question = self.tokenize(question)
 
         video_name = str(cur_sample['video'])
-        video_path = os.path.join(self.data_path, 'videos',
-                                  self.video_to_dir[video_name],
+        # video_path = os.path.join(self.data_path, 'videos',
+        #                           self.video_to_dir[video_name],
+        #                           video_name + '.mp4')
+        video_path = os.path.join(self.data_path, 'NExTVideo',
                                   video_name + '.mp4')
         video = self.get_video(video_path)
 

@@ -14,17 +14,23 @@ def get_dataset(config_dataset):
     if dataset_name == 'RefCOCO':
         from datasets.refcoco import RefCOCODataset
         dataset = RefCOCODataset(**config_dataset,
-                                 image_transforms=transforms.Compose([transforms.ToTensor()]))
+                                 image_transforms=transforms.Compose(
+                                     [transforms.ToTensor()]))
     elif dataset_name == 'GQA':
         from datasets.gqa import GQADataset
         dataset = GQADataset(**config_dataset,
                              balanced=True,
-                             image_transforms=transforms.Compose([transforms.ToTensor()]))
+                             image_transforms=transforms.Compose(
+                                 [transforms.ToTensor()]))
     elif dataset_name == 'OKVQA':
         from datasets.okvqa import OKVQADataset
         dataset = OKVQADataset(**config_dataset,
-                               image_transforms=transforms.Compose([transforms.ToTensor()]))
+                               image_transforms=transforms.Compose(
+                                   [transforms.ToTensor()]))
     elif dataset_name == 'NExTQA':
+        import nltk
+        nltk.download('averaged_perceptron_tagger_eng')
+        nltk.download('punkt_tab')
         from datasets.nextqa import NExTQADataset
         dataset = NExTQADataset(**config_dataset)
     elif dataset_name == 'MyDataset':
@@ -87,7 +93,9 @@ def accuracy(prediction, ground_truth, *args):
     if len(prediction) == 0:  # if no prediction, return 0
         return 0
     assert len(prediction) == len(ground_truth)
-    pred_gt_filtered = [(pred, gt) for pred, gt in zip(prediction, ground_truth) if gt != '']
+    pred_gt_filtered = [(pred, gt)
+                        for pred, gt in zip(prediction, ground_truth)
+                        if gt != '']
     score = 0
     for p, g in pred_gt_filtered:
         if general_postprocessing(p) == g:
