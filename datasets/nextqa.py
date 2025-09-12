@@ -10,6 +10,9 @@ import spacy
 
 from nltk.tokenize import word_tokenize
 from nltk.corpus import wordnet
+import nltk
+
+nltk.download('wordnet')
 import numpy as np
 
 from pywsd.utils import lemmatize_sentence
@@ -113,8 +116,9 @@ class NExTQADataset(Dataset):
         original_fps = video_reader.get_avg_fps()
         num_frames = int(vlen * self.fps / original_fps)
         num_frames = min(self.max_num_frames, num_frames)
-        frame_idxs = np.linspace(0, vlen, num_frames,
-                                 endpoint=False).astype(np.int)
+        # frame_idxs = np.linspace(0, vlen, num_frames,
+        #                          endpoint=False).astype(np.int)
+        frame_idxs = np.linspace(0, vlen - 1, num_frames).astype(np.int)
         video = video_reader.get_batch(frame_idxs).byte()
         video = video.permute(0, 3, 1, 2)
         return video
