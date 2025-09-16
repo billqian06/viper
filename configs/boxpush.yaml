@@ -1,0 +1,15 @@
+dataset:
+  data_path: /workspace/vu2/boxpush
+  dataset_name: boxpush
+  input_type: 'video'
+  fps: 4
+  batch_size: 2
+  max_samples: 2
+
+codex:
+  prompt: ./prompts/benchmarks/boxpush.prompt
+
+results_dir: ./results/boxpush/
+
+load_models:
+  maskrcnn: True

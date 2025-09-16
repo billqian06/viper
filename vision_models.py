@@ -1189,15 +1189,20 @@ def codex_helper(extended_prompt):
     prompts = extended_prompt if isinstance(extended_prompt,
                                             list) else [extended_prompt]
 
-    if config.codex.model in ("gpt-3.5-turbo", "gpt-4"):
+    def is_valid_model(name: str) -> bool:
+        models = client.models.list()
+        return any(m.id == name for m in models.data)
+
+    if is_valid_model(config.codex.model):
         # Chat Completions (v1.x style)
         responses = []
         for prompt in prompts:
-            r = client.chat.completions.create(
+            # print("Prompt:", prompt)
+            r = client.responses.create(
                 model=config.codex.model,
-                messages=[{
+                input=[{
                     "role":
-                    "system",
+                    "developer",
                     "content":
                     "Only answer with a function starting def execute_command."
                 }, {
@@ -1205,12 +1210,11 @@ def codex_helper(extended_prompt):
                     "content": prompt
                 }],
                 temperature=config.codex.temperature,
-                max_tokens=config.codex.max_tokens,
+                max_output_tokens=config.codex.max_tokens,
                 top_p=1.0,
-                # best_of is NOT supported for chat completions
-                stop=["\n\n"],
             )
-            text = r.choices[0].message.content or ""
+            # responses API gives you output_text directly
+            text = r.output_text or ""
             text = text.replace(
                 "execute_command(image)",
                 "execute_command(image, my_fig, time_wait_between_lines, syntax)"

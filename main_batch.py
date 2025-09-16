@@ -1,6 +1,7 @@
 import datetime
 import math
 import os
+import re
 import pathlib
 from functools import partial
 import warnings
@@ -48,13 +49,44 @@ def run_program(parameters, queues_in_, input_type_, retrying=False):
 
     code, sample_id, image, possible_answers, query = parameters
 
+    def strip_before_function(code: str) -> str:
+        """
+        Remove everything before and including the first 'def ...:' line
+        (handles optional return type annotations like -> str or -> [str, dict]).
+        Returns the remainder (function body).
+        """
+        # Regex to match 'def <name>(...)' with optional return type annotation
+        pattern = r'^\s*def\s+\w+\s*\(.*\)\s*(->\s*[^:]+)?\s*:'
+        match = re.search(pattern, code, flags=re.MULTILINE)
+        if not match:
+            return code  # no function header found, return as-is
+
+        # Cut right after the header
+        return code[match.end():].lstrip("\n")
+
+    def strip_after_return(code: str) -> str:
+        """
+        Keep everything up to and including the first 'return' line.
+        Strip away everything after.
+        """
+        match = re.search(r'^\s*return\b.*', code, flags=re.MULTILINE)
+        if not match:
+            return code  # no return found
+
+        # Keep from start up to the end of that 'return' line
+        return code[:match.end()]
+
+    code = strip_before_function(code)
+    code = strip_after_return(code)
+
     # Wrap the code with a standard header
     code_header = f'def execute_command_{sample_id}(' \
                   f'{input_type_}, possible_answers, query, ' \
                   f'ImagePatch, VideoSegment, ' \
                   'llm_query, bool_to_yesno, distance, best_image_match):\n' \
-                  f'    # Answer is:'
+                  f'    # Answer is:\n'
     code = code_header + code
+    # print('Code to execute:\n', code)
 
     try:
         # Compile the code into the global namespace
@@ -212,6 +244,7 @@ def main():
                             result = run_program(
                                 [c, sample_id, img, possible_answers, query],
                                 queues_in, input_type)
+                            # print('Result:', result)
                             results.append(result)
                     else:
                         results = list(
@@ -261,6 +294,9 @@ def main():
             console.print("Completing logging and exiting...")
 
     try:
+        # print('Computing final accuracy...')
+        # print('All results:', all_results)
+        # print('All answers:', all_answers)
         accuracy = dataset.accuracy(all_results, all_answers,
                                     all_possible_answers, all_query_types)
         console.print(f'Final accuracy: {accuracy}')

@@ -33,7 +33,7 @@ def get_dataset(config_dataset):
         nltk.download('punkt_tab')
         from datasets.nextqa import NExTQADataset
         dataset = NExTQADataset(**config_dataset)
-    elif dataset_name == 'MyDataset':
+    elif dataset_name in ['MyDataset', 'boxpush']:
         from datasets.my_dataset import MyDataset
         dataset = MyDataset(**config_dataset)
     else:
@@ -64,7 +64,7 @@ def general_postprocessing(prediction):
                 prediction = "no"
         elif isinstance(prediction, int):
             prediction = str(prediction)
-            print("No answer is a number, so this will be wrong")
+            # print("No answer is a number, so this will be wrong")
     except:
         prediction = str(prediction)
 
@@ -98,6 +98,6 @@ def accuracy(prediction, ground_truth, *args):
                         if gt != '']
     score = 0
     for p, g in pred_gt_filtered:
-        if general_postprocessing(p) == g:
+        if general_postprocessing(p) == general_postprocessing(g):
             score += 1
     return score / len(pred_gt_filtered)
