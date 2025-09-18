@@ -34,6 +34,8 @@ def get_dataset(config_dataset):
         from datasets.nextqa import NExTQADataset
         dataset = NExTQADataset(**config_dataset)
     elif dataset_name in ['MyDataset', 'boxpush']:
+        import nltk
+        nltk.download('punkt_tab')
         from datasets.my_dataset import MyDataset
         dataset = MyDataset(**config_dataset)
     else:
