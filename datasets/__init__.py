@@ -35,6 +35,7 @@ def get_dataset(config_dataset):
         dataset = NExTQADataset(**config_dataset)
     elif dataset_name in ['MyDataset', 'boxpush']:
         import nltk
+        nltk.download('averaged_perceptron_tagger_eng')
         nltk.download('punkt_tab')
         from datasets.my_dataset import MyDataset
         dataset = MyDataset(**config_dataset)
