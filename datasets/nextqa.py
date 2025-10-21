@@ -121,7 +121,7 @@ class NExTQADataset(Dataset):
         frame_idxs = np.linspace(0, vlen - 1, num_frames).astype(np.int)
         video = video_reader.get_batch(frame_idxs).byte()
         video = video.permute(0, 3, 1, 2)
-        return video
+        return video, frame_idxs.tolist()
 
     def __getitem__(self, idx):
         sample_id = self.sample_ids[idx]
@@ -137,7 +137,7 @@ class NExTQADataset(Dataset):
         #                           video_name + '.mp4')
         video_path = os.path.join(self.data_path, 'NExTVideo',
                                   video_name + '.mp4')
-        video = self.get_video(video_path)
+        video, frame_idxs = self.get_video(video_path)
 
         if self.version == 'openended':
             answer = str(cur_sample['answer'])
@@ -155,6 +155,7 @@ class NExTQADataset(Dataset):
             "sample_id": sample_id,
             "answer": answer,
             "image": video,
+            "frame_indices": frame_idxs,
             "query": question,
             'pil_img': -1,
             "query_type": query_type,

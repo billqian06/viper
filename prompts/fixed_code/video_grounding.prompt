@@ -1,0 +1,10 @@
+
+    seg = VideoSegment(video)
+    boxes = []
+    for i, frame in enumerate(seg.frame_iterator()):
+        query_output = frame.simple_query(query) or ""
+        if query_output != "":
+            patches = frame.find(query_output)
+            for p in patches[:1]:
+                boxes.append({"frame": i, **p.to_box(label=query_output, score=0.6)})
+    return boxes

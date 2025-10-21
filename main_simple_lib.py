@@ -3,6 +3,7 @@ import ast
 import math
 import sys
 import time
+import re
 
 import requests
 import torch.multiprocessing as mp
@@ -289,6 +290,10 @@ def load_image(path):
 def get_code(query):
     model_name_codex = 'codellama' if config.codex.model == 'codellama' else 'codex'
     code = forward(model_name_codex, prompt=query, input_type="image")
+    code = re.sub(r"^```(?:python)?\n|```$",
+                  "",
+                  code.strip(),
+                  flags=re.MULTILINE)
     if 'gpt' not in config.codex.model:
         code = f'def execute_command(image, my_fig, time_wait_between_lines, syntax):' + code  # chat models give execute_command due to system behaviour
     code_for_syntax = code.replace(
