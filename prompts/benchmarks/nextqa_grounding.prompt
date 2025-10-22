@@ -357,8 +357,7 @@ class VideoSegment:
 # Each dict must have keys:
 #   - "frame": int                    # local index within this segment (0..num_frames-1)
 #   - "label": str                    # object / phrase grounded (e.g., "man", "ball", "red hat")
-#   - "bbox": [left, lower, right, upper]  # integers, pixel coords in original frame convention
-#   - "score": float                  # confidence or heuristic score in [0,1]
+#   - "patch": [left, lower, right, upper]  # integers, pixel coords in original frame convention
 #
 # DO NOT call `select_answer`. DO NOT generate a textual answer.
 # Only return boxes relevant to the query intent (you may return multiple boxes).
@@ -383,7 +382,7 @@ def execute_command(video, possible_answers, query) -> List[Dict]:
         if video_location != "":
             patches = frame.find(video_location)
             for p in patches[:1]:
-                boxes.append({"frame": i, **p.to_box(label=video_location, score=0.6)})
+                boxes.append({"frame": i, "label": video_location, "patch": p})
     return boxes
 
 
@@ -400,7 +399,7 @@ def execute_command(video, possible_answers, query) -> List[Dict]:
             table_anchor = table_patches[0]
             man_patches.sort(key=lambda m: distance(m, table_anchor))
             man_patch = man_patches[0]
-            boxes.append({"frame": i, **man_patch.to_box(label="man", score=0.9)})
+            boxes.append({"frame": i, "label": "man", "patch": man_patch})
 
             hand_terms = ["hand"]
             hand_candidates = []
@@ -423,7 +422,7 @@ def execute_command(video, possible_answers, query) -> List[Dict]:
                     hand_candidates = full_candidates[:3]
             
             for hand_patch in hand_candidates:
-                boxes.append({"frame": i, **hand_patch.to_box(label="hand", score=0.9)})
+                boxes.append({"frame": i, "lable": "hand", "patch": hand_patch})
     return boxes
 
 
@@ -435,9 +434,9 @@ def execute_command(video, possible_answers, query) -> List[Dict]:
     for i, frame in enumerate(seg.frame_iterator()):
         if frame.exists("kid") and frame.exists("ball"):
             for p in frame.find("kid")[:2]:
-                boxes.append({"frame": i, **p.to_box(label="kid", score=0.85)})
+                boxes.append({"frame": i, "label": "kid", "patch": p})
             for p in frame.find("ball")[:2]:
-                boxes.append({"frame": i, **p.to_box(label="ball", score=0.85)})
+                boxes.append({"frame": i, "label": "ball", "patch": p})
 
     return boxes
 
