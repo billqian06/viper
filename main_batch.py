@@ -205,6 +205,8 @@ def main():
                             collate_fn=my_collate)
     input_type = dataset.input_type
 
+    compute_accuracy = config.setdefault('compute_accuracy', True)
+
     all_results = []
     all_answers = []
     all_codes = []
@@ -277,7 +279,7 @@ def main():
                 all_img_paths += [
                     dataset.get_sample_path(idx) for idx in batch['index']
                 ]
-                if i % config.log_every == 0:
+                if compute_accuracy and i % config.log_every == 0:
                     try:
                         accuracy = dataset.accuracy(all_results, all_answers,
                                                     all_possible_answers,
@@ -293,15 +295,16 @@ def main():
             console.print(f'Exception: {e}')
             console.print("Completing logging and exiting...")
 
-    try:
-        # print('Computing final accuracy...')
-        # print('All results:', all_results)
-        # print('All answers:', all_answers)
-        accuracy = dataset.accuracy(all_results, all_answers,
-                                    all_possible_answers, all_query_types)
-        console.print(f'Final accuracy: {accuracy}')
-    except Exception as e:
-        print(f'Error computing accuracy: {e}')
+    if compute_accuracy:
+        try:
+            # print('Computing final accuracy...')
+            # print('All results:', all_results)
+            # print('All answers:', all_answers)
+            accuracy = dataset.accuracy(all_results, all_answers,
+                                        all_possible_answers, all_query_types)
+            console.print(f'Final accuracy: {accuracy}')
+        except Exception as e:
+            print(f'Error computing accuracy: {e}')
 
     if config.save:
         results_dir = pathlib.Path(config['results_dir'])
